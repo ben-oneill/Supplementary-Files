@@ -1,0 +1,214 @@
+---
+title: "Queuing Analysis"
+author: "Ben O'Neill"
+date: "21/10/2021"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+
+#Set options
+knitr::opts_chunk$set(echo = TRUE)
+
+#Load libraries
+library(utilities)
+library(ggplot2)
+
+```
+
+This markdown document contains queuing analysis for the following paper:
+
+O'Neill, B. (2021) Transformation and simulation for a generalised queuing problem using a G/G/n/G/+  queuing model.
+
+
+## Example of a queuing plot and queuing summary plot
+
+In this section we produce simulated example data for queuing inputs for users and we use the ```queue``` function to produce full queuing information for this case.  We print the queuing information and summary and we produce the queuing plot and the queuing summary plot.  In order to ensure that our analysis is reproducible we "set the seed" for all simulations.
+
+```{r Queuing example}
+
+#Set parameters for queuing model
+lambda <- 1.5
+mu     <- 6
+alpha  <- 5
+beta   <- 2
+
+#Generate arrival-times, use-times and patience-times
+set.seed(1)
+K <- 20
+ARRIVE   <- cumsum(rexp(K, rate = 1/lambda))
+USE.FULL <- 2*mu*runif(K)
+WAIT.MAX <- function(kappa) { alpha*exp(-kappa/beta) }
+
+#Compute and print queuing information with n = 3
+QUEUE <- queue(arrive = ARRIVE, use.full = USE.FULL,
+               wait.max = WAIT.MAX, n = 3, revive = 2,
+               close.arrive = 30, close.full = 35)
+QUEUE
+
+#Display the summary statistics for the queue
+SUMMARY <- summary(QUEUE)
+SUMMARY
+
+#Generate queuing plot and queuing summary plot
+FIGURE1 <- plot(QUEUE,   print = FALSE)
+FIGURE2 <- plot(SUMMARY, print = FALSE)
+
+```
+```{r Save the plots}
+
+#Save the plots
+ggsave(plot = FIGURE1, file = 'Figure 1 - Queuing Plot.jpg', 
+       width = 6, height = 8, units = 'in')
+
+ggsave(plot = FIGURE2, file = 'Figure 2 - Queuing Summary Plot.jpg', 
+       width = 6, height = 6, units = 'in')
+
+```
+```{r Display the plots}
+
+#Display the plots
+FIGURE1
+FIGURE2
+
+```
+
+## Simulation analysis for optimising number of facilities
+
+In this section we conduct a simulation analysis to look at the queuing information under a range of different values for the number of facilities.  We first produce a set of simulations for the user inputs for the ```queue``` function.  We then produce the queuing information for each of these simulations and extract the user waiting-times, use-times and unserved-times.  We use these to estimate the risk under a stipulated set of cost values for the optimisation.  We also produce a plot showing the distribution of the average waiting-times, use-times and unserved-times under each value for the number of service facilities.
+
+```{r Produce simulations}
+
+#Set parameters for queuing model
+lambda <- 1.5
+mu     <- 6
+alpha  <- 5
+beta   <- 2
+
+#Generate simulation list and loss vector
+N <- 8
+M <- 10^4
+SIMS    <- vector(mode = 'list', length = M)
+METRICS <- data.frame(simulation    = rep(1:M, each = N),
+                      n             = rep(1:N, times = M), 
+                      K             = rep(0, N*M),
+                      mean.wait     = rep(0, N*M), 
+                      mean.use      = rep(0, N*M),
+                      mean.unserved = rep(0, N*M))
+
+#Generate arrival-times, use-times and patience-times in each simulation
+set.seed(1)
+for (i in 1:M) {
+  K <- 30
+  ARRIVE   <- cumsum(rexp(K, rate = 1/lambda))
+  USE.FULL <- 2*mu*runif(K)
+  WAIT.MAX <- function(kappa) { alpha*exp(-kappa/beta) }
+  KK <- sum(ARRIVE <= 30)
+  SIMS[[i]] <- data.frame(arrive   = ARRIVE[1:KK], 
+                          use.full = USE.FULL[1:KK]) }
+
+#Compute queuing statistics from simulations
+for (i in 1:M)  {
+  ARRIVE   <- SIMS[[i]]$arrive
+  USE.FULL <- SIMS[[i]]$use.full
+  for (n in 1:N) {
+    QQ <- queue(arrive = ARRIVE, use.full = USE.FULL,
+                wait.max = WAIT.MAX, n = n, revive = 2,
+                close.arrive = 30, close.full = 35)
+    VALUE <- (i-1)*N+n
+    METRICS[VALUE, 3]   <- length(ARRIVE)
+    METRICS[VALUE, 4:6] <- summary(QQ)$summary.stats[1, 1:3] } }
+
+```
+```{r Plot distributions of queuing statistics}
+
+#Create plotting data
+M1 <- METRICS[, c(1,2,4)]
+M2 <- METRICS[, c(1,2,5)]
+M3 <- METRICS[, c(1,2,6)]
+colnames(M1) <- c('simulation', 'n', 'mean.time')
+colnames(M2) <- c('simulation', 'n', 'mean.time')
+colnames(M3) <- c('simulation', 'n', 'mean.time')
+M1$type <- 'await'
+M2$type <- 'cuse'
+M3$type <- 'bunserved'
+PLOTDATA1 <- rbind(M1, M2, M3)
+
+#Generate plot of mean times
+LABELS <- c(`await`     = 'Mean wait-times', 
+            `cuse`      = 'Mean use-times',
+            `bunserved` = 'Mean unserved-times')
+FIGURE3 <- ggplot(aes(x    = factor(n), 
+                      y    = mean.time, 
+                      fill = factor(type, levels = c('await', 'cuse', 'bunserved'))),
+                  data = PLOTDATA1) +
+           geom_violin() +
+           scale_fill_manual(values = c('red', 'blue', 'black')) +
+           facet_wrap(~ type, labeller = as_labeller(LABELS), ncol = 1, scales = 'free') +
+           theme(plot.title = element_text(hjust = 0.5, size = 14, face = 'bold',
+                                           margin = margin(t = 10, r = 0, b = 10, l = 0)),
+                 plot.subtitle = element_text(hjust = 0.5, face = 'bold',
+                                              margin = margin(t = 0, r = 0, b = 10, l = 0)),
+                 legend.position = 'none',
+                 axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)),
+                 axis.title.y = element_text(margin = margin(t = 0, r = 10, b = 0, l = 0))) +
+           ggtitle('Distributions of mean times') +
+           xlab('Number of Facilities') + ylab('Mean Time')
+
+#Set costs and generate plot of loss
+CF <- 30
+CW <- 1
+CU <- 2
+PLOTDATA2 <- METRICS[, 1:3]
+PLOTDATA2$loss <- CF*METRICS$n + CW*METRICS$mean.wait*METRICS$K + CU*METRICS$mean.unserved*METRICS$K 
+MEANLOSS <- rep(0, N)
+for (i in 1:N) { 
+  VALS <- (1:M-1)*N+i
+  MEANLOSS[i] <- mean(PLOTDATA2$loss[VALS]) }
+PLOTDATA3 <- data.frame(n = 1:N, meanloss = MEANLOSS)
+SUBTITLE <- paste0('(Facility cost = ', CF, ', Wait cost = ', CW, ', Unserved cost = ', CU, ')')
+
+#Generate plot of mean times
+FIGURE4 <- ggplot(aes(x = factor(n), y = loss), data = PLOTDATA2) +
+           geom_violin(fill = 'orange') +
+           geom_point(aes(x = factor(n), y = MEANLOSS), 
+                      colour = 'black', size = 2, data = PLOTDATA3) +
+           theme(plot.title      = element_text(hjust = 0.5, size = 14, face = 'bold',
+                                                margin = margin(t = 10, r = 0, b = 10, l = 0)),
+                 plot.subtitle   = element_text(hjust = 0.5, face = 'bold',
+                                                margin = margin(t = 0, r = 0, b = 10, l = 0)),
+                 legend.position = 'none',
+                 axis.title.x    = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)),
+                 axis.title.y    = element_text(margin = margin(t = 0, r = 10, b = 0, l = 0))) +
+           scale_y_continuous(limits = c(0, 800)) +
+           ggtitle('Loss distributions') +
+           labs(title = 'Loss distributions', subtitle = SUBTITLE,
+                x = 'Number of Facilities', y = 'Loss')
+
+```
+```{r Save the simulated metrics and plots}
+
+#Save the simulated metrics
+saveRDS(METRICS, file = 'Queue Simulation Metrics.rds')
+
+#Save the plots
+ggsave(plot = FIGURE3, file = 'Figure 3 - Distribution of means.jpg',
+       width = 6, height = 6, units = 'in')
+
+ggsave(plot = FIGURE4, file = 'Figure 4 - Loss distribution.jpg',
+       width = 6, height = 6, units = 'in')
+
+```
+```{r Display the plots}
+
+#Display the plots
+FIGURE3
+FIGURE4
+
+```
+
+
+
+
+
+
