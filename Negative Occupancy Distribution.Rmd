@@ -1,0 +1,604 @@
+---
+title: "Negative Occupancy Distribution"
+author: "Ben O'Neill"
+date: "10 February 2020"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+#Load libraries
+library(moments);
+library(ggplot2);
+
+#Set theme for plots
+THEME <- theme(plot.title    = element_text(hjust = 0.5, size = 14, face = 'bold'),
+               plot.subtitle = element_text(hjust = 0.5, face = 'bold'));
+
+#Create logdiff function
+logdiff <- function(l1, l2) { l1 + VGAM::log1mexp(l1-l2); }
+
+```
+
+In project we generate functions to compute probabilities/log-probabilities from the negative occupancy distribution, and to simulate random variables from this distribution.  We also generate approximate mass values for the distribution and review the accuracy of this approximation.  This computational work follows the analysis conducted in O'Neill (2020).
+
+
+#1. Exact and approximate mass function for the negative occupancy distribution
+
+We program a vectorised mass function for the negative occupancy distribution as the function ```dnegocc```.  This function uses standard syntax for probability distributions in ```R```.  The function takes an argument vector ```T``` that consists of non-negative integer values, and the parameters ```m```, ```k``` and ```prob```.  The function also allows an optional logical input ```log``` that allows the user to request log-probabilities instead of probabilities.  Working in log-space, the function computes the vector of log-probabilities using the recursive method set out in Section 3 of O'Neill (2020).  The function initially computes all log-probabilies up to the maximum argument value in the input vector ```T```, but it then references these log-probabilities over the actual values in that argument.  The output of the function is the vector of log-probabilities/probabilities for the values in the argument vector.  We also program a vectorised function ```dnegocc.all``` that gives a matrix of mass values for all values of the occupancy number up to the size parameter (i.e., all values ```k = 1,2,...,m```).
+
+```{r Create function to compute negative occupancy probabilities}
+
+#Create function to compute negative occupancy density
+dnegocc <- function(T, m, k, prob = 1, log = FALSE) {
+  
+  #Check inputs
+  if (!is.numeric(T))     { stop('Error: Values in T must be integers'); }
+  if (any(T != as.integer(T))) { stop('Error: Values in T must be integers'); }
+  if (min(T) < 0)         { stop('Error: Values in T must be non-negative'); }
+  if (!is.numeric(m))     { stop('Error: m must be an integer'); }
+  if (length(m) != 1)     { stop('Error: m must be a scalar'); }
+  if (m != as.integer(m)) { stop('Error: m must be an integer'); }
+  if (m <= 0)             { stop('Error: m must be positive'); }
+  if (!is.numeric(k))     { stop('Error: k must be an integer'); }
+  if (length(k) != 1)     { stop('Error: k must be a scalar'); }
+  if (k != as.integer(k)) { stop('Error: k must be an integer'); }
+  if (k < 0)              { stop('Error: k must be non-negative'); }
+  if (k > m)              { stop('Error: k cannot be more than m'); }
+  if (!is.numeric(prob))  { stop('Error: prob must be numeric'); }
+  if (length(prob) != 1)  { stop('Error: prob must be a scalar'); }
+  if (prob < 0)           { stop('Error: prob must be between zero and one'); }
+  if (prob > 1)           { stop('Error: prob must be between zero and one'); }
+  if (!is.logical(log))   { stop('Error: log should be a logical value'); }
+  if (length(log) != 1)   { stop('Error: log should be a single logical value'); }
+  
+  #Create matrix for recursion and output vector
+  TT     <- max(T);
+  LOGS   <- matrix(-Inf, nrow = TT+1, ncol = k);
+  NEGOCC <- rep(-Inf, length(T));
+  
+  #Compute first column of matrix
+  if(prob == 1) { LOGS[ , 1] <- c(0, rep(-Inf, TT)) } else {
+                  LOGS[ , 1] <- log(prob) + (0:TT)*log(1-prob); }
+  
+  #Compute remaining rows via recursion
+  if (k > 1) {
+  for (r in 2:k) {
+    
+    LLL <- (0:TT)*log(1-prob*(m-r+1)/m);
+    
+    for (t in 0:TT) {
+      TERMS <- LLL[1:(t+1)] + LOGS[(t+1):1,r-1];
+      LOGS[t+1,r] <- log(prob*(m-r+1)/m) + matrixStats::logSumExp(TERMS); } } }
+  
+  #Generate output vector
+  
+  for (i in 1:length(T)) {
+    NEGOCC[i] <- LOGS[T[i]+1,k]; }
+  #Print output vector
+  if (log) { NEGOCC } else { exp(NEGOCC) } }
+
+```
+```{r Create function to compute negative occupancy probabilities}
+
+#Create function to compute negative occupancy density
+dnegocc.all <- function(T, m, prob = 1, log = FALSE) {
+  
+  #Check inputs
+  if (!is.numeric(T))     { stop('Error: Values in T must be integers'); }
+  if (any(T != as.integer(T))) { stop('Error: Values in T must be integers'); }
+  if (min(T) < 0)         { stop('Error: Values in T must be non-negative'); }
+  if (!is.numeric(m))     { stop('Error: m must be an integer'); }
+  if (length(m) != 1)     { stop('Error: m must be a scalar'); }
+  if (m != as.integer(m)) { stop('Error: m must be an integer'); }
+  if (m <= 0)             { stop('Error: m must be positive'); }
+  if (!is.numeric(prob))  { stop('Error: prob must be numeric'); }
+  if (length(prob) != 1)  { stop('Error: prob must be a scalar'); }
+  if (prob < 0)           { stop('Error: prob must be between zero and one'); }
+  if (prob > 1)           { stop('Error: prob must be between zero and one'); }
+  if (!is.logical(log))   { stop('Error: log should be a logical value'); }
+  if (length(log) != 1)   { stop('Error: log should be a single logical value'); }
+  
+  #Create matrix for recursion and output vector
+  TT     <- max(T);
+  LOGS   <- matrix(-Inf, nrow = TT+1, ncol = m);
+  
+  #Compute first column of matrix
+  if(prob == 1) { LOGS[ , 1] <- c(0, rep(-Inf, TT)) } else {
+                  LOGS[ , 1] <- log(prob) + (0:TT)*log(1-prob); }
+  
+  #Compute remaining rows via recursion
+  if  (m > 1) {
+  for (r in 2:m) {
+    
+    LLL <- (0:TT)*log(1-prob*(m-r+1)/m);
+    
+    for (t in 0:TT) {
+      TERMS <- LLL[1:(t+1)] + LOGS[(t+1):1,r-1];
+      LOGS[t+1,r] <- log(prob*(m-r+1)/m) + matrixStats::logSumExp(TERMS); } } }
+  
+  #Generate output matrix
+  LOGS <- t(LOGS);
+  rownames(LOGS) <- 1:m;
+  
+  #Print output vector
+  if (log) { LOGS } else { exp(LOGS) } }
+
+```
+
+The above functions compute the mass function using a recursive method.  For large ```m``` it is possible to use a lognormal or gamma approximation to the negative occupancy distribution, which matches the first two moments of the distribution.  We program a vectorised version of the approximate mass function aas the function ```dnegocc_approx```.  This function has an additional argument that requires specification of the approximating distribution, which is either ```lnorm``` or ```gamma```.
+
+```{r Create approximate density function}
+
+dnegocc_approx <- function(x, m, k, prob, log = FALSE) {
+  
+  #Check inputs
+  if (!is.numeric(T))     { stop('Error: Values in T must be integers'); }
+  if (any(T != as.integer(T))) { stop('Error: Values in T must be integers'); }
+  if (min(T) < 0)         { stop('Error: Values in T must be non-negative'); }
+  if (!is.numeric(m))     { stop('Error: m must be an integer'); }
+  if (length(m) != 1)     { stop('Error: m must be a scalar'); }
+  if (m != as.integer(m)) { stop('Error: m must be an integer'); }
+  if (m <= 0)             { stop('Error: m must be positive'); }
+  if (!is.numeric(k))     { stop('Error: k must be an integer'); }
+  if (length(k) != 1)     { stop('Error: k must be a scalar'); }
+  if (k != as.integer(k)) { stop('Error: k must be an integer'); }
+  if (k < 0)              { stop('Error: k must be non-negative'); }
+  if (k > m)              { stop('Error: k cannot be more than m'); }
+  if (!is.numeric(prob))  { stop('Error: prob must be numeric'); }
+  if (length(prob) != 1)  { stop('Error: prob must be a scalar'); }
+  if (prob < 0)           { stop('Error: prob must be between zero and one'); }
+  if (prob > 1)           { stop('Error: prob must be between zero and one'); }
+  if (!is.logical(log))   { stop('Error: log should be a logical value'); }
+  if (length(log) != 1)   { stop('Error: log should be a single logical value'); }
+  
+  #Set output vector
+  OUT  <- rep(0, length(x));
+  
+  #Compute generalised harmonic numbers
+  H1   <- sum(1/((m-k+1):m));
+  H2   <- sum(1/((m-k+1):m)^2);
+  
+  #Compute moments
+  MEAN <- max(0,(m/prob)*H1 - k);
+  VAR  <- max(0,(m/prob)^2*H2 - (m/prob)*H1);
+  
+  #Approximation using gamma distribution
+  MM   <- max(x);
+  if (VAR == 0) { LLL   <- c(0, rep(-Inf, MM)); }
+  if (VAR > 0)  { SHAPE <- (MEAN + 1/2)^2/VAR;
+                  RATE  <- m*(MEAN + 1/2)/VAR;
+                  LGA   <- pgamma((0:(MM+1))/m, shape = SHAPE, rate = RATE, log = TRUE);
+                  LOWER <- LGA[1:(MM+1)];
+                  UPPER <- LGA[2:(MM+2)];
+                  LLL   <- logdiff(UPPER, LOWER); }
+  
+  for (i in 1:length(x)) { OUT[i] <- LLL[x[i]+1]; }
+  
+  if (log) { OUT; } else { exp(OUT); } }
+
+```
+
+
+#2. Random simulation from the negative occupancy distribution
+
+Our next step is to program a vectorised function ```rnegocc``` to simulate random variables from the negative occupancy distribution.  This function simulates the random variables by recognising that a negative occupancy random variable is a sum of geometric random variables, with parameters given in O'Neill (2020).  The function takes an input ```n```  to specify the desired number of random variables.  The output of the function is a vector of this many *excess hitting times* using the specified parameters.
+
+In the code below we program the ```rnegocc``` function and use this to generate a data frame called ```SAMPLE```, which contains a large sample of values generated from the distribution (under a specified set of parameters).  We then show a bar-plot of the generated values to see the shape of the distribution under the specified parameters.
+
+```{r Create function to generate negative occupancy random variables}
+
+#Create function to generate negative occupancy random variables
+rnegocc <- function(S, m, k, prob = 1) {
+  
+  #Check inputs
+  if (!is.numeric(S))     { stop('Error: n must be an integer'); }
+  if (length(S) != 1)     { stop('Error: n must be a scalar'); }
+  if (S != as.integer(S)) { stop('Error: n must be an integer'); }
+  if (S <= 0)             { stop('Error: n must be positive'); }
+  if (!is.numeric(m))     { stop('Error: m must be an integer'); }
+  if (length(m) != 1)     { stop('Error: m must be a scalar'); }
+  if (m != as.integer(m)) { stop('Error: m must be an integer'); }
+  if (m <= 0)             { stop('Error: m must be positive'); }
+  if (!is.numeric(k))     { stop('Error: k must be an integer'); }
+  if (length(k) != 1)     { stop('Error: k must be a scalar'); }
+  if (k != as.integer(k)) { stop('Error: k must be an integer'); }
+  if (k < 0)              { stop('Error: k must be non-negative'); }
+  if (k > m)              { stop('Error: k cannot be more than m'); }
+  if (!is.numeric(prob))  { stop('Error: prob must be numeric'); }
+  if (length(prob) != 1)  { stop('Error: prob must be a scalar'); }
+  if (prob < 0)           { stop('Error: prob must be between zero and one'); }
+  if (prob > 1)           { stop('Error: prob must be between zero and one'); }
+  
+  #Set the empty output vector
+  OUT <- rep(NA, S);
+  
+  #Generate negative occupancy random variables
+  for (s in 1:S) {
+    if (k == 0) { OUT[s] <- 0; }
+    if (k != 0) { PARS <- prob*(m:1)/m;
+                  VALS <- rep(0, k);
+                  for (i in 1:k) { VALS[i] <- rgeom(1, prob = PARS[i]); }
+                  OUT[s] <- sum(VALS); } }
+  
+  #Print the output
+  OUT; }
+
+```
+```{r Create function to generate negative occupancy random variables}
+
+#Create function to generate occupancy random variables
+rocc <- function(S, n, m, prob = 1) {
+  
+  #Check inputs
+  if (!is.numeric(S))     { stop('Error: S must be an integer'); }
+  if (n != as.integer(n)) { stop('Error: S must be an integer'); }
+  if (S <= 0)             { stop('Error: S must be positive'); }
+  if (!is.numeric(n))     { stop('Error: n must be an integer'); }
+  if (length(n) != 1)     { stop('Error: n must be a scalar'); }
+  if (n != as.integer(n)) { stop('Error: n must be an integer'); }
+  if (n < 0)              { stop('Error: n must be non-negative'); }
+  if (!is.numeric(m))     { stop('Error: m must be an integer'); }
+  if (length(m) != 1)     { stop('Error: m must be a scalar'); }
+  if (m != as.integer(m)) { stop('Error: m must be an integer'); }
+  if (m <= 0)             { stop('Error: m must be positive'); }
+  if (!is.numeric(prob))  { stop('Error: prob must be numeric'); }
+  if (length(prob) != 1)  { stop('Error: prob must be a scalar'); }
+  if (prob < 0)           { stop('Error: prob must be between zero and one'); }
+  if (prob > 1)           { stop('Error: prob must be between zero and one'); }
+  
+  #Set the empty output vector
+  OUT <- rep(NA, S);
+  
+  #Generate occupancy random variable
+  for (s in 1:S) {
+    x <- 0;
+    t <- rgeom(1, prob = prob);
+    while (n > t) {
+      x <- x + 1;
+      t <- ifelse(x == m, Inf, t + rgeom(1, prob = prob*(1-x/m))); }
+    OUT[s] <- x; }
+  
+  #Print the output
+  OUT; }
+
+```
+
+
+#3. Simulation check on distribution
+
+To check that our algorithm produces the correct mass values for the distribution, we will generate a large random sample from the negative occupancy distribution (using a method that does not use the mass function) and we will then compare the sample proportions to the probabilities generated by our algorithm for the mass function.
+
+```{r Generate sample of negative occupancy random variables}
+
+#Set the parameters
+n    <- 10^4;
+T    <- 0:80;
+m    <- 30;
+k    <- 14;
+prob <- 0.6;
+
+#Set seed for computation
+set.seed(71349851);
+
+#Generate mass values from negative occupancy distribution
+START     <- Sys.time();
+PROBS     <- dnegocc(T, m, k, prob);
+PROBS.ALL <- dnegocc.all(T, m, prob);
+TIME      <- Sys.time() - START;
+paste0('Computing PROBS took ', round(TIME,4), ' ', attributes(TIME)$units);
+
+#Generate sample from negative occupancy distribution
+START  <- Sys.time();
+SAMPLE <- rnegocc(n, m, k, prob);
+TIME   <- Sys.time() - START;
+paste0('Computing SAMPLE took ', round(TIME,4), ' ', attributes(TIME)$units);
+
+#Create data frame of sample proportions
+DATA <- data.frame(Value = T, Proportion = 0, Probability = PROBS);
+for (t in T) { DATA$Proportion[t+1] <- sum(SAMPLE == t)/n; }
+
+```
+```{r Print histogram of sample}
+
+#Show histogram of sample
+FIGURE1 <- ggplot(aes(x = Value, y = Proportion), data = DATA) +
+           geom_bar(stat = 'identity', fill = 'grey') +
+           geom_point(aes(y = Probability), colour = 'black') +
+           THEME +
+           ggtitle('Sample from Negative Occupancy Distribution') +
+           labs(subtitle = paste0('(', formatC(n, format = "f", big.mark = ",", digits = 0), 
+                                  ' simulations with parameters m = ',
+                                  m, ', k = ', k, ' and theta = ', prob, 
+                                  ') \n (Simulations are grey bars; exact mass values shown by black points)'));
+
+FIGURE1;
+
+```
+
+We can see that the large number of random values is sufficient to get a smooth estimate of the true shape of the distribution.  This sample of values can be used to check the theoretical results for the distribution under the specified parameters.
+
+```{r Create functions to compute the moments}
+
+MOMENTS <- function(m, k, prob) {
+  
+  #Check inputs
+  if (!is.numeric(m))     { stop('Error: m must be an integer'); }
+  if (length(m) != 1)     { stop('Error: m must be a scalar'); }
+  if (m != as.integer(m)) { stop('Error: m must be an integer'); }
+  if (m <= 0)             { stop('Error: m must be positive'); }
+  if (!is.numeric(k))     { stop('Error: k must be an integer'); }
+  if (length(k) != 1)     { stop('Error: k must be a scalar'); }
+  if (k != as.integer(k)) { stop('Error: k must be an integer'); }
+  if (k < 0)              { stop('Error: k must be non-negative'); }
+  if (k > m)              { stop('Error: k cannot be more than m'); }
+  if (!is.numeric(prob))  { stop('Error: prob must be numeric'); }
+  if (length(prob) != 1)  { stop('Error: prob must be a scalar'); }
+  if (prob < 0)           { stop('Error: prob must be between zero and one'); }
+  if (prob > 1)           { stop('Error: prob must be between zero and one'); }
+  
+  #Compute generalised harmonic numbers
+  H1   <- sum(1/((m-k+1):m));
+  H2   <- sum(1/((m-k+1):m)^2);
+  H3   <- sum(1/((m-k+1):m)^3);
+  H4   <- sum(1/((m-k+1):m)^4);
+  
+  #Compute moments
+  MEAN <- (m/prob)*H1 - k;
+  VAR  <- (m/prob)^2*H2 - (m/prob)*H1;
+  SKEW <- (2*(m/prob)^3*H3 - 3*(m/prob)^2*H2 + (m/prob)*H1)/(VAR^(3/2));
+  KURT <- 3 + (6*(m/prob)^4*H4 - 12*(m/prob)^3*H3 + 7*(m/prob)^2*H2 - (m/prob)*H1)/(VAR^2);
+  
+  #Print the moments
+  list(MEAN = MEAN, VAR = VAR, SKEW = SKEW, KURT = KURT); }
+
+SAMPLE_MOMENTS <- function(DATA) {
+  
+  #Compute the sample moments
+  MEAN <- mean(DATA);
+  VAR  <- var(DATA);
+  SKEW <- moments::skewness(DATA);
+  KURT <- moments::kurtosis(DATA);
+  
+  #Print the sample moments
+  list(MEAN = MEAN, VAR = VAR, SKEW = SKEW, KURT = KURT); }
+
+```
+```{r Create function to compute the moments}
+
+MOMENTS(m, k, prob);
+
+SAMPLE_MOMENTS(SAMPLE);
+
+```
+```{r Print histogram of sample}
+
+#Compute approximate probabilities
+START     <- Sys.time();
+APPROX    <- dnegocc_approx(T, m, k, prob);
+TIME      <- Sys.time() - START;
+paste0('Computing APPROX took ', round(TIME,4), ' ', attributes(TIME)$units);
+DATA$Approx_gamma <- APPROX;
+
+#Show histogram of sample
+FIGURE2 <- ggplot(aes(x = Value, y = Probability), data = DATA) +
+           geom_line(aes(x = Value, y = Approx_gamma), colour = 'blue', size = 1) +
+           geom_point(stat = 'identity', fill = 'black') +
+           scale_y_log10(breaks = scales::trans_breaks("log10", function(x) 10^x),
+             labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+           THEME +
+           ggtitle('Negative Occupancy Distribution') +
+           labs(subtitle = paste0('(Parameters m = ', m, ', k = ', k, ' and theta = ', prob, 
+                                  ') \n (Exact values shown by black points; gamma approximation shown by blue line)'));
+
+FIGURE2;
+
+#Show histogram of sample
+FIGURE3 <- ggplot(aes(x = Value, y = Probability), data = DATA[1:72,]) +
+           geom_line(aes(x = Value, y = Approx_gamma), colour = 'blue', size = 1) +
+           geom_point(stat = 'identity', fill = 'black') +
+           THEME +
+           ggtitle('Negative Occupancy Distribution') +
+           labs(subtitle = paste0('(Parameters m = ', m, ', k = ', k, ' and theta = ', prob, 
+                                  ') \n (Exact values are black points; gamma approximation is blue line)'));
+
+FIGURE3;
+
+```
+
+
+#4. Full simulation over matrix of parameter values
+
+In this part we produce some additional figures that are not used in the paper, for the purposes of exploratory analysis.
+
+```{r Compute LRSE values}
+
+#Set seed for computation
+set.seed(523409812);
+
+#Set the maximum value of m
+MM <- 1000
+
+#Set start time for timer
+START <- Sys.time();
+
+#Set argument limits
+if (exists('TLIM')) {
+  OLD_TLIM <- TLIM;
+  OLD_TMAX <- TMAX;
+  OLD_MM   <- nrow(TLIM);
+  TLIM     <- matrix(NA, nrow = MM, ncol = MM);
+  TLIM[1:OLD_MM, 1:OLD_MM] <- OLD_TLIM;
+  TMAX <- rep(NA, MM);
+  TMAX[1:OLD_MM] <- OLD_TMAX; } else {
+  OLD_MM   <- 0;
+  TLIM     <- matrix(NA, nrow = MM, ncol = MM);
+  TMAX <- rep(NA, MM); }
+
+for (m in (OLD_MM+1):MM) {
+for (k in 1:m)           {
+  
+  #Compute generalised harmonic numbers
+  H1   <- sum(1/((m-k+1):m));
+  H2   <- sum(1/((m-k+1):m)^2);
+  
+  #Compute moments
+  MEAN <- m*H1 - k;
+  VAR  <- max(0, m^2*H2 - m*H1);
+
+  #Compute T limit
+  TLIM[m,k] <- ceiling(MEAN + 5*sqrt(VAR)); }
+  TMAX[m]   <- max(TLIM[m,], na.rm = TRUE); }
+
+#Create matrix of LRSE values
+if (exists('LRSE')) {
+  OLD_LRSE <- LRSE;
+  OLD_MM   <- nrow(LRSE);
+  LRSE     <- matrix(NA, nrow = MM, ncol = MM);
+  LRSE[1:OLD_MM, 1:OLD_MM] <- OLD_LRSE; } else {
+  OLD_MM   <- 0;
+  LRSE     <- matrix(NA, nrow = MM, ncol = MM); }
+
+#Compute LRSE values
+for (m in (OLD_MM+1):MM) {
+  PROBS.ALL <- dnegocc.all(0:TMAX[m], m, prob = 1, log = TRUE);
+  for (k in 1:m) {  
+    DIST      <- PROBS.ALL[k, 1:(TLIM[m,k]+1)];
+    APPROX    <- dnegocc_approx(0:TLIM[m,k], m, k, prob = 1, log = TRUE);
+    LRSE[m,k] <- log(sqrt(sum((exp(DIST) - exp(APPROX))^2))); } }
+TIME      <- Sys.time() - START;
+paste0('Computing LRSE with M = ', MM, ' took ', round(TIME,4), ' ', attributes(TIME)$units);
+
+```
+```{r Create heatmap data for LRSE values}
+
+HDATA <- data.frame(m    = rep(1:MM, each  = MM),
+                    k    = rep(1:MM, times = MM),
+                    LRSE = NA);
+
+for (i in 1:nrow(HDATA)) {
+  HDATA$LRSE[i] <- LRSE[HDATA$m[i], HDATA$k[i]]; }
+
+```
+```{r Print heatmap of LRSE values}
+
+#Show heatmap
+FIGURE4 <- ggplot(aes(x = k, y = m), data = HDATA) +
+           geom_tile(aes(x = k, y = m, fill = exp(LRSE))) +
+           scale_fill_gradient(trans = "log10",
+                               breaks = scales::trans_breaks("log10", function(x) 10^x),
+                               labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+           THEME +
+           guides(fill = guide_legend(title = "RSE")) + 
+           ggtitle("RSE Heatmap");
+
+FIGURE4;
+
+```
+```{r Compute mean, max and diag of RSE}
+
+#Compute mean, max and diag of RSE
+MEAN_RSE <- rep(0, MM);
+MAX_RSE  <- rep(0, MM);
+DIAG_RSE <- rep(0, MM);
+for (m in 1:MM) {   
+  MEAN_RSE[m] <- exp(matrixStats::logSumExp(LRSE[m, 1:m]) - log(m));
+  MAX_RSE[m]  <- exp(max(LRSE[m, 1:m]));
+  DIAG_RSE[m] <- exp(LRSE[m, m]); }
+
+PL_DATA <- data.frame(m        = 1:m,
+                      Mean     = MEAN_RSE,
+                      Maximum  = MAX_RSE,
+                      CoupColl = DIAG_RSE) %>% 
+           filter(m >= 10);
+
+```
+```{r Print heatmap of LRMSE values}
+
+#Show plot
+FIGURE5 <- ggplot(aes(x = m), data = PL_DATA) +
+           geom_point(aes(y = Mean), colour = 'blue') +
+           geom_point(aes(y = Maximum)) +
+           geom_point(aes(y = CoupColl), colour = 'darkgreen') +
+           geom_label_repel(aes(y = Mean,     label = "Mean"),     
+                            nudge_x = -10, data = PL_DATA %>% filter(m == MM)) +
+           geom_label_repel(aes(y = Maximum,  label = "Max"),      
+                            nudge_x = -10, data = PL_DATA %>% filter(m == MM)) +
+           geom_label_repel(aes(y = CoupColl, label = "CoupColl"), 
+                            nudge_x = -10, data = PL_DATA %>% filter(m == MM)) +
+           scale_y_log10(breaks = scales::trans_breaks("log10", function(x) 10^x),
+                         labels = scales::trans_format("log10", scales::math_format(10^.x)),
+                         limits = c(1e-3, 1e-1)) +
+           THEME +
+           ggtitle('RSE of Approximation to NegOcc') +
+           ylab('RSE')
+
+FIGURE5;
+
+```
+```{r Compute maps of moments}
+
+#Compute 
+MEAN_MAP <- matrix(NA, nrow = MM, ncol = MM);
+VAR_MAP  <- matrix(NA, nrow = MM, ncol = MM);
+SKEW_MAP <- matrix(NA, nrow = MM, ncol = MM);
+KURT_MAP <- matrix(NA, nrow = MM, ncol = MM);
+
+for (m in 1:MM) { 
+for (k in 1:m)  { 
+  MOMS <- MOMENTS(m, k, prob = 1);
+  MEAN_MAP[m,k] <- MOMS$MEAN;
+  VAR_MAP[m,k]  <- ifelse(k == 1, 0, MOMS$VAR);
+  if (VAR_MAP[m,k] > 0) {
+  SKEW_MAP[m,k] <- MOMS$SKEW;
+  KURT_MAP[m,k] <- MOMS$KURT; } } }
+
+MOMDATA <- data.frame(m    = rep(1:MM, each  = MM),
+                      k    = rep(1:MM, times = MM));
+
+for (i in 1:nrow(MOMDATA)) {
+  MOMDATA$Mean[i] <- MEAN_MAP[MOMDATA$m[i], MOMDATA$k[i]];
+  MOMDATA$Var[i]  <-  VAR_MAP[MOMDATA$m[i], MOMDATA$k[i]];
+  MOMDATA$Skew[i] <- SKEW_MAP[MOMDATA$m[i], MOMDATA$k[i]];
+  MOMDATA$Kurt[i] <- KURT_MAP[MOMDATA$m[i], MOMDATA$k[i]]; }
+
+
+```
+```{r Print heatmap of moment values}
+
+#Show heatmap
+FIGURE6A <- ggplot(aes(x = k, y = m), data = MOMDATA) +
+           geom_tile(aes(x = k, y = m, fill = Var)) +
+           scale_fill_gradient(trans = "log10",
+                               breaks = scales::trans_breaks("log10", function(x) 10^x),
+                               labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+           THEME +
+           guides(fill = guide_legend(title = "Var")) + 
+           ggtitle('Moment Heatmap');
+
+FIGURE6B <- ggplot(aes(x = k, y = m), data = MOMDATA) +
+           geom_tile(aes(x = k, y = m, fill = abs(Skew))) +
+           scale_fill_gradient(trans = "log10",
+                               breaks = scales::trans_breaks("log10", function(x) 10^x),
+                               labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+           THEME +
+           guides(fill = guide_legend(title = "Skew")) + 
+           ggtitle('Moment Heatmap');
+
+FIGURE6C <- ggplot(aes(x = k, y = m), data = MOMDATA) +
+           geom_tile(aes(x = k, y = m, fill = abs(Kurt-3))) +
+           scale_fill_gradient(trans = "log10",
+                               breaks = scales::trans_breaks("log10", function(x) 10^x),
+                               labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+           THEME +
+           guides(fill = guide_legend(title = "KurtDiff")) + 
+           ggtitle('Moment Heatmap');
+
+
+```
+
+
+
+
